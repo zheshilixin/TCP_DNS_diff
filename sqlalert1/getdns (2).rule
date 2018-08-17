@@ -1,0 +1,209 @@
+#############################################
+#本文件定义的规则， 用于检查没有经过DNS解析的TCP连接
+#暂时设定的时间为5min，其中同一sip内dns解析的保留
+#############################################
+
+#############################################
+#第一步：
+#       获取last(5min)的DNS返回，并且剔除非IP
+#       将DNS返回的sip，dip，anwer做个转换，与TCP返回对应
+#
+#############################################
+def get_dns() {
+    sql = "
+        SELECT 
+            sum(flow) AS sum_flow,
+            dip,
+            sip,
+            answer,
+            isresponse
+        FROM 
+            'dns-*'
+        WHERE  
+            last(5m) AND ip_range(answer, '0.0.0.0/1')
+        GROUP BY
+            sip,dip,answer,isresponse
+        LIMIT
+            50,50,50,50
+    ";
+    #ip_type = '0.0.0.0';
+    #ip_type = '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$';
+    list1 = query(sql);
+    result1 = item_filter(list1, "isresponse == 1 ");
+    #result2 = item_filter(result1, "answer == ip_type");
+    #print_list(result1);
+    dns_list = [];
+    for item in result1{
+        dict = {};
+        dict['sip'] = item['dip'];
+        dict['dip'] = item['answer'];
+        dict['sum_flow'] = item['sum_flow'];
+        dns_list = append(dns_list,dict);
+    }
+    return dns_list;
+}
+
+##############################################
+#  第二步：
+#        获取sip为非C类内网的last(5min)连接
+#
+##############################################
+def get_tcp() {
+    sql2 = "
+        SELECT
+            SUM(flow) AS sum_flow
+        FROM 'tcp-*'
+        WHERE last(5m) AND ip_range('sip', '192.168.0.0/16')
+        GROUP BY
+            sip,dip
+        LIMIT
+            50,50
+    ";
+    sql3 = "
+        SELECT 
+            SUM(flow) AS sum_flow
+        FROM 'tcp-*'
+        WHERE last(5m) AND ip_range('sip', '192.168.0.0/16') AND ip_range('dip', '192.168.0.0/16')
+        GROUP By
+            sip, dip
+        LIMIT
+            50,50
+    ";
+    result1 = query(sql2);
+    result2 = query(sql3);
+    result3 = compare_tcp(result1,result2);
+   # result2 = item_filter(result, "unknown == 0");
+    #result3 = item_filter(result, "dip != '192.168.0.0/16'");
+    return result3;
+}
+
+#将temp中的数据仅输出sip，dip
+def split(temp){
+    res = [];
+    for item in temp{
+        dict = {};
+        dict['sip'] = item['sip'];
+        dict['dip'] = item['dip'];
+        res = append(res,dict);
+    }
+    return res;
+}
+
+#判断pitem是否在plist中
+def islist(plist,pitem){
+    i = 0;
+    for item in plist{
+        if (item['sip'] == pitem['sip'] && item['dip'] == pitem['dip']){
+            #print(pitem);
+            continue;
+        }
+        else {
+            #print (item);
+            i++;
+        }
+    }
+    if (i < len(plist)){
+        return false;
+    }
+    else {
+        return true;
+    }
+}
+
+#判断pitem是否在plist中（多了个sum_flow，条件可以增加）
+def islist_tcp(plist,pitem){
+    i = 0;
+    for item in plist{
+        if (item['sip'] == pitem['sip'] && item['dip'] == pitem['dip'] && item['sum_flow'] == pitem['sum_flow']){
+            continue;       
+        }   
+        else{
+            i++;
+        }
+    }
+    if (i < len(plist)){
+        return true;
+    }
+    else {
+        return false;
+    }
+}
+
+#将res1中的res2删除
+def compare_tcp(res1,res2){
+    len = len(res1) < len(res2) ? len(res1) : len(res2);
+    res = [];
+    if (len == 0){
+        return false;
+    }
+    else {
+        for item_res1 in res1 {
+            if (islist_tcp(res2,item_res1)){
+                continue;
+            }
+            else{
+                res = append(res,item_res1);
+            
+            }
+        }
+    }
+    return res;
+}
+
+#去除plist中第n个元素
+def remove_list(plist,n){
+    res = [];
+    i = 0;
+    for (i; i < n; i++){
+        res = append(res,plist[i]);
+    }
+    for (i = n + 1; i < len(plist); i++){
+        res = append(res,plist[i]);
+    }
+    return res;
+}
+
+#dip相同的归并，sip保留为第一个sip
+def merge_sip(req){
+    for (i = 0; i < len(req); i++){
+        for (j = len(req)-1; j > i; j --){
+            if (req[i]['dip'] == req[j]['dip']){
+                req = remove_list(req,j);
+            }
+            else {
+                continue;
+            }
+        }
+    }
+    return req;
+}
+
+#dns，tcp数据比较，以res输出（tcp-dns）
+def compare3(dns,tcp,res){
+    for item_tcp in tcp{
+        if (islist(dns,item_tcp)){
+            res = append(res,item_tcp);
+        }
+        else {
+            continue;
+        }
+    }
+    return res;
+}
+
+dns_val = get_dns();
+tcp_val = get_tcp();
+dns_value = split(dns_val);
+tcp_value = split(tcp_val);
+diff = [];
+result_diff = merge_sip(compare3(dns_val,tcp_val,diff));
+#print ("DNS VAL:  ");
+#print_list(dns_val);
+print ("DNS VALUE: ");
+print_list (dns_value);
+#print ("TCP VAL:  ");
+#print_list(tcp_val);
+print ("TCP VALUE:  ");
+print_list (tcp_value);
+print ("DIFF VALUE: ");
+print_list (result_diff);

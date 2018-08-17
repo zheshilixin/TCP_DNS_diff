@@ -1,0 +1,26 @@
+__range_time_unit__   = "5m";
+__get_num__           = 5;
+
+#####
+# 规则描述
+# __type__:         报警类型;
+# __subtype__:      报警子类型;
+#
+# __desc_type__:    报警类型描述;
+#####
+__type__  = "TCP";
+__subtype__ = "tcpdnsdiff";
+
+__desc_type__    = "[TCP] abnormal tcp connection";
+
+__info_alert__ = {
+    "level"     : "info",
+    "desc_subtype" : "TCP & DNS abnormal connection"
+};
+
+__fields_all__ = {
+    "@timestamp"    : {"desc": "timestamp"},
+    "sip"           : {"desc": "SIP"},
+    "dip"           : {"desc": "DIP"},
+    "sum_flow"      : {"desc": "SUM of FLOW"}
+};
