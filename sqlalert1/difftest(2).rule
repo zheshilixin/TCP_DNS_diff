@@ -1,0 +1,222 @@
+import "test/tcpdns/cfg/getdns.rule";
+
+def get_dns() {
+    sql = "
+        SELECT 
+            sum(flow) AS sum_flow,
+            dip,
+            answer,
+        FROM 
+            'dns-*'
+        WHERE  
+            last(%(__range_time_unit__)) AND ip_range(answer, '0.0.0.0/1')
+        GROUP BY
+            dip,answer
+        LIMIT
+            50,50
+    ";
+    #ip_type = '0.0.0.0';
+    #ip_type = '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$';
+    list1 = query(sql);
+    result1 = item_filter(list1, "isresponse == 1 ");
+    #result2 = item_filter(result1, "answer == ip_type");
+    #print_list(result1);
+    dns_list = [];
+    for item in result1{
+        dict = {};
+        dict['sip'] = item['dip'];
+        dict['dip'] = item['answer'];
+        dict['sum_flow'] = item['sum_flow'];
+        dns_list = append(dns_list,dict);
+    }
+    return dns_list;
+}
+
+def get_tcp() {
+    sql = "
+        SELECT 
+            SUM(flow) AS sum_flow
+        FROM 'tcp-*'
+        WHERE last(%(__range_time_unit__)) AND ip_range('sip', '192.168.0.0/16') AND not ip_range('dip', '192.168.0.0/16')
+        GROUP By
+            sip, dip
+        LIMIT
+            50,50
+    ";
+    result = query(sql);
+    return result;
+}
+
+def split(temp){
+    res = [];
+    for item in temp{
+        dict = {};
+        dict['sip'] = item['sip'];
+        dict['dip'] = item['dip'];
+        res = append(res,dict);
+    }
+    return res;
+}
+
+def islist(plist,pitem){
+    i = 0;
+    for item in plist{
+        if (item['sip'] == pitem['sip'] && item['dip'] == pitem['dip']){
+            #print(pitem);
+            continue;
+        }
+        else {
+            #print (item);
+            i++;
+        }
+    }
+    if (i < len(plist)){
+        return false;
+    }
+    else {
+        return true;
+    }
+}
+
+def islist_tcp(plist,pitem){
+    i = 0;
+    for item in plist{
+        if (item['sip'] == pitem['sip'] && item['dip'] == pitem['dip'] && item['sum_flow'] == pitem['sum_flow']){
+            continue;       
+        }   
+        else{
+            i++;
+        }
+    }
+    if (i < len(plist)){
+        return true;
+    }
+    else {
+        return false;
+    }
+}
+
+def compare_tcp(res1,res2){
+    len = len(res1) < len(res2) ? len(res1) : len(res2);
+    res = [];
+    if (len == 0){
+        return false;
+    }
+    else {
+        for item_res1 in res1 {
+            if (islist_tcp(res2,item_res1)){
+                continue;
+            }
+            else{
+                res = append(res,item_res1);
+            
+            }
+        }
+    }
+    return res;
+}
+
+def remove_list(plist,n){
+    res = [];
+    i = 0;
+    for (i; i < n; i++){
+        res = append(res,plist[i]);
+    }
+    for (i = n + 1; i < len(plist); i++){
+        res = append(res,plist[i]);
+    }
+    return res;
+}
+
+def merge_sip(req){
+    for (i = 0; i < len(req); i++){
+        for (j = len(req)-1; j > i; j --){
+            if (req[i]['dip'] == req[j]['dip']){
+                req = remove_list(req,j);
+            }
+            else {
+                continue;
+            }
+        }
+    }
+    return req;
+}
+
+def compare3(dns,tcp){
+    res = [];
+    for item_tcp in tcp{
+        if (islist(dns,item_tcp)){
+            res = append(res,item_tcp);
+        }
+        else {
+            continue;
+        }
+    }
+    return res;
+}
+
+def compare4(list_now, list_his){
+    res = [];
+    for item_now in list_now{
+        if (islist(list_his,item_now)){
+            res = append(res, item_now);
+        }
+    }
+    return res;
+}
+
+def top_n(req,n){
+    res = [];
+    for(i = 0; i < n ; i++){
+        res1 = [];
+        res_max = item_max(req,"sum_flow");
+        res1 = append(res1,res_max);
+        res = append(res,res_max);
+        req = compare3(res1,req);
+    }
+    return res;
+}
+
+def get_diff(){
+    dns_val = get_dns();
+    tcp_val = get_tcp();
+    dns_value = split(dns_val);
+    tcp_value = split(tcp_val);
+    #result_diff = merge_sip(compare3(dns_val,tcp_val));
+    result_diff = compare3(dns_val,tcp_val);
+    #result_max = item_max(result_diff, "sum_flow");
+    result_n = top_n(result_diff,__get_num__);
+    #print("agg_median = ", agg_max(result_diff,"sip","sum_flow"));
+    #print("percentile = ", agg_percentile(result_diff,"sip","sum_flow",99));
+    return result_n;
+}
+
+def __alert(list, args){
+    item_set(list,"@timestamp",time("T"));
+    __level__           = args["level"];
+    __desc_subtype__    = args["desc_subtype"];
+    alert(list);
+}
+
+def query_diff(res,args){
+    info_alert_list = [];
+    warn_alert_lsit = [];
+    __now__ = now();
+    result_now = get_diff();
+    __now__ = now() - 300 * MS_SEC;
+    result_his = get_diff();
+    info_alert_list = result_now;
+    alert_list = compare4(result_now,result_his);
+    warn_alert_list = compare4(result_now,alert_list);
+    return  __alert(warn_alert_list,__info_alert__);
+}
+
+
+#__alert(warn_alert_list, __info_alert__);
+
+call_list = ([
+   {"name": "query_diff", "args":{}}
+]);
+pprint(call_list([
+    {"name": "query_diff", "args": {}}
+]));
